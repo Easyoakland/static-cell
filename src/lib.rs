@@ -234,11 +234,31 @@ impl<T> ConstStaticCell<T> {
 macro_rules! make_static {
     ($val:expr) => ($crate::make_static!($val, ));
     ($val:expr, $(#[$m:meta])*) => {{
-        type T = impl ::core::marker::Sized;
+        // Constrain Opaque type in its own module.
+        mod inner {
+            pub type T = impl ::core::marker::Sized;
+            // Constrain `T` to type of `$val`
+            pub fn val() -> T {
+                $val
+            }
+        }
         $(#[$m])*
-        static STATIC_CELL: $crate::StaticCell<T> = $crate::StaticCell::new();
-        #[deny(unused_attributes)]
-        let (x,) = STATIC_CELL.uninit().write(($val,));
+        static STATIC_CELL: $crate::StaticCell<inner::T> = $crate::StaticCell::new();
+
+        // `drop` has to monomorphize to a particular type by assigning to `f`.
+        let f = drop;
+        // Constrain `f` to take type of `$val` without saying the type directly or calling expr again
+        let _constrain_f_by_expr = || {
+            f(&$val);
+        };
+        // Write the pointer and coerce back to the non-opaque type.
+        let x = {
+            let ptr = STATIC_CELL.uninit().write(inner::val()) as *mut inner::T;
+            let ptr = ptr.cast(); // Coerce `T` back to the type of $val.
+            unsafe { &mut *ptr}
+        };
+        // Constrain x by f (and hence by $val expression)
+        f(&x);
         x
     }};
 }
